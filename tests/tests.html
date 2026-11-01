@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>NFL Bros Tests</title>
+  <style>
+    body { font: 15px/1.5 Consolas, monospace; background: #0b1424; color: #e8eefc; padding: 1.5em; }
+    .pass { color: #4be38a; }
+    .fail { color: #ff6b5e; font-weight: bold; }
+    h2 { margin: 1em 0 0.3em; font-size: 16px; color: #ffd21f; }
+  </style>
+</head>
+<body>
+  <h1 id="summary">Running...</h1>
+  <div id="log"></div>
+
+  <script src="../js/teams.js"></script>
+  <script src="../js/rules.js"></script>
+  <script src="../js/plays.js"></script>
+  <script src="../js/ai.js"></script>
+  <script src="../js/sim.js"></script>
+  <script src="../js/match.js"></script>
+  <script src="../js/season.js"></script>
+  <script>
+    const R = FB.Rules, S = FB.Season;
+    const log = document.getElementById('log');
+    let passed = 0;
+    const failures = [];
+
+    function group(name) {
+      log.insertAdjacentHTML('beforeend', `<h2>${name}</h2>`);
+    }
+    function check(name, ok, detail) {
+      if (ok) passed++;
+      else failures.push(name + (detail !== undefined ? ` (${detail})` : ''));
+      log.insertAdjacentHTML('beforeend', `<div class="${ok ? 'pass' : 'fail'}">${ok ? 'ok  ' : 'FAIL'} ${name}${!ok && detail !== undefined ? ' : ' + detail : ''}</div>`);
+    }
+    function eq(name, got, want) {
+      check(name, JSON.stringify(got) === JSON.stringify(want), `got ${JSON.stringify(got)}, wanted ${JSON.stringify(want)}`);
+    }
+
+    function fresh(over) {
+      const g = R.newGame();
+      g.mode = 'normal';
+      return Object.assign(g, over || {});
+    }
+
+    group('Downs');
+    {
+      let g = fresh({ pos: 0, yard: 30, down: 1, toGo: 10 });
+      R.applyResult(g, { type: 'down', team: 0, yard: 34 });
+      eq('Gain of 4 makes it 2nd and 6', [g.down, g.toGo, g.yard], [2, 6, 34]);
+      let o = R.applyResult(g, { type: 'down', team: 0, yard: 41 });
+      eq('Passing the sticks is a first down', [g.down, g.toGo, g.yard, o.notes], [1, 10, 41, ['first']]);
+      R.applyResult(g, { type: 'incomplete' });
+      eq('Incomplete keeps the spot and uses a down', [g.down, g.toGo, g.yard], [2, 10, 41]);
+
+      g = fresh({ pos: 0, yard: 92, down: 1, toGo: 8 });
+      eq('Near the goal line it is goal to go', R.downLabel(g), '1st & Goal');
+
+      g = fresh({ pos: 0, yard: 40, down: 4, toGo: 3 });
+      o = R.applyResult(g, { type: 'down', team: 0, yard: 42 });
+      eq('Short on 4th down loses the ball at the spot', [g.pos, g.yard, g.down, o.notes], [1, 58, 1, ['downs']]);
+
+      g = fresh({ pos: 0, yard: 40, down: 4, toGo: 3 });
+      R.applyResult(g, { type: 'incomplete' });
+      eq('Incomplete on 4th down turns it over', [g.pos, g.yard], [1, 60]);
+
+      g = fresh({ pos: 1, yard: 50, down: 2, toGo: 5 });
+      o = R.applyResult(g, { type: 'down', team: 0, yard: 30 });
+      eq('Turnover gives the other team a first down', [g.pos, g.yard, g.down, g.toGo, o.notes], [0, 30, 1, 10, ['turnover']]);
+
+      g = fresh({ pos: 0, yard: 30, down: 2, toGo: 5 });
+      R.applyResult(g, { type: 'down', team: 0, yard: 26 });
+      eq('A loss adds to the distance', [g.down, g.toGo], [3, 9]);
+    }
+
+    group('Scoring');
+    {
+      let g = fresh({ pos: 0, yard: 90 });
+      let o = R.applyResult(g, { type: 'td', team: 0 });
+      eq('Touchdown is 6 and goes to the conversion', [g.score, o.next, g.mode], [[6, 0], 'pat', 'pat']);
+      R.chooseConversion(g, 'xp');
+      o = R.applyResult(g, { type: 'xp', good: true });
+      eq('Extra point is 1, then the scorer kicks off', [g.score, o.next, g.kicker, g.mode], [[7, 0], 'kickoff', 0, 'kickoff']);
+
+      g = fresh({ pos: 0, yard: 90 });
+      R.applyResult(g, { type: 'td', team: 0 });
+      R.chooseConversion(g, 'two');
+      eq('Two-point try snaps from the 10', [g.yard, R.downLabel(g)], [90, 'Two-point try']);
+      R.applyResult(g, { type: 'td', team: 0 });
+      eq('Two-point conversion is worth 2', g.score, [8, 0]);
+
+      g = fresh({ pos: 0, yard: 90 });
+      R.applyResult(g, { type: 'td', team: 0 });
+      R.chooseConversion(g, 'two');
+      R.applyResult(g, { type: 'down', team: 0, yard: 95 });
+      eq('Failed two-point try scores nothing', [g.score, g.mode], [[6, 0], 'kickoff']);
+
+      g = fresh({ pos: 0, yard: 70, down: 4 });
+      R.applyResult(g, { type: 'fg', good: true });
+      eq('Field goal is 3', [g.score, g.kicker], [[3, 0], 0]);
+
+      g = fresh({ pos: 0, yard: 70, down: 4 });
+      R.applyResult(g, { type: 'fg', good: false });
+      eq('Missed kick goes over at the spot of the kick', [g.pos, g.yard], [1, 37]);
+      g = fresh({ pos: 0, yard: 95, down: 4 });
+      R.applyResult(g, { type: 'fg', good: false });
+      eq('Missed kick from close gives the ball at the 20', [g.pos, g.yard], [1, 20]);
+
+      g = fresh({ pos: 0, yard: 3 });
+      R.applyResult(g, { type: 'safety', team: 1 });
+      eq('Safety is 2 and the other team kicks', [g.score, g.kicker], [[0, 2], 0]);
+
+      g = fresh({ pos: 0, yard: 50, down: 2 });
+      R.applyResult(g, { type: 'td', team: 1 });
+      eq('Defensive touchdown counts as a turnover', [g.score, g.pos, g.stats[0].turnovers], [[0, 6], 1, 1]);
+    }
+
+    group('Kicks');
+    {
+      let g = fresh({ mode: 'kickoff', kicker: 0, pos: 0 });
+      R.applyResult(g, { type: 'down', team: 1, yard: 28 });
+      eq('Kickoff return sets a first down', [g.pos, g.yard, g.down, g.mode], [1, 28, 1, 'normal']);
+      g = fresh({ mode: 'kickoff', kicker: 1, pos: 1 });
+      R.applyResult(g, { type: 'touchback', team: 0, yard: 25 });
+      eq('Touchback comes out to the 25', [g.pos, g.yard], [0, 25]);
+      g = fresh({ mode: 'punt', pos: 0, yard: 30, down: 4 });
+      R.applyResult(g, { type: 'down', team: 1, yard: 40 });
+      eq('Punt return changes possession', [g.pos, g.yard, g.down], [1, 40, 1]);
+      g = fresh({ mode: 'kickoff', pos: 0, kicker: 0 });
+      R.applyResult(g, { type: 'td', team: 1 });
+      eq('Kick return touchdown scores without a turnover', [g.score, g.stats[0].turnovers, g.pos], [[0, 6], 0, 1]);
+    }
+
+    group('Clock and periods');
+    {
+      let g = fresh({ clock: 0, quarter: 1 });
+      eq('Q1 ending moves on', [R.endPeriodIfNeeded(g), g.quarter, g.clock], ['quarter', 2, 120]);
+      g = fresh({ clock: 0, quarter: 2, openingKicker: 1, pos: 0 });
+      eq('Halftime: other team kicks, sides swap', [R.endPeriodIfNeeded(g), g.quarter, g.kicker, g.mode, R.dir(g, 0)], ['halftime', 3, 0, 'kickoff', -1]);
+      g = fresh({ clock: 0, quarter: 4, score: [10, 7] });
+      eq('Q4 with a lead ends the game', [R.endPeriodIfNeeded(g), g.over, g.winner], ['final', true, 0]);
+      g = fresh({ clock: 0, quarter: 4, score: [7, 7] });
+      eq('Q4 tied goes to overtime', [R.endPeriodIfNeeded(g, true), g.ot, g.mode, g.over], ['overtime', true, 'kickoff', false]);
+      R.applyResult(fresh(), { type: 'incomplete' });
+      g.mode = 'normal';
+      g.pos = 0;
+      g.yard = 70;
+      R.applyResult(g, { type: 'fg', good: true });
+      eq('Overtime score ends it at once', [g.over, g.winner, g.score], [true, 0, [10, 7]]);
+      g = fresh({ clock: 0, quarter: 5, ot: true, score: [3, 3] });
+      eq('Overtime with no score plays on', [R.endPeriodIfNeeded(g, false), g.over, g.quarter], ['overtime', false, 6]);
+      g = fresh({ clock: 0, mode: 'pat', quarter: 2 });
+      eq('The clock waits for the conversion', R.endPeriodIfNeeded(g), null);
+      g = fresh({ clock: 3 });
+      R.tick(g, 5);
+      eq('Clock stops at zero', g.clock, 0);
+      g = fresh({ clock: 65.2, quarter: 3 });
+      eq('Clock label', [R.clockLabel(g), R.quarterLabel(g)], ['1:06', 'Q3']);
+    }
+
+    group('Field position');
+    {
+      const g = fresh({ half: 1 });
+      eq('Team 0 drives right in the first half', [R.toX(g, 0, 25), R.toYard(g, 0, 35)], [35, 25]);
+      eq('Team 1 drives left', [R.toX(g, 1, 25), R.toYard(g, 1, 85)], [85, 25]);
+      g.half = 2;
+      eq('Directions swap at halftime', R.toX(g, 0, 25), 85);
+      const t = [{ abbr: 'AAA' }, { abbr: 'BBB' }];
+      g.pos = 0;
+      g.yard = 30;
+      eq('Spot on your own side', R.spotLabel(g, t), 'AAA 30');
+      g.yard = 70;
+      eq('Spot on their side', R.spotLabel(g, t), 'BBB 30');
+    }
+
+    group('Teams');
+    {
+      eq('32 teams', FB.Teams.length, 32);
+      eq('All abbreviations differ', new Set(FB.Teams.map((t) => t.abbr)).size, 32);
+      FB.CONFERENCES.forEach((c) => FB.DIVISIONS.forEach((d) => {
+        eq(`${c} ${d} has 4 teams`, FB.Teams.filter((t) => t.conf === c && t.div === d).length, 4);
+      }));
+      const units = ['qb', 'wr', 'rb', 'ol', 'rush', 'runD', 'cover'];
+      check('Every rating is between 55 and 99', FB.Teams.every((t) => units.every((u) => t[u] >= 55 && t[u] <= 99)));
+      check('Every team has a QB and 3 key players', FB.Teams.every((t) => t.qbName && t.stars.length === 3));
+      const rand = FB.U.seeded(1);
+      const unplaced = [];
+      FB.Teams.forEach((t) => {
+        const r = FB.buildRoster(t, null, rand);
+        const names = Object.values(r).map((p) => p.name).filter(Boolean);
+        t.stars.forEach((s) => {
+          if (names.indexOf(s[1]) < 0) unplaced.push(s[1]);
+        });
+      });
+      eq('Every key player gets a spot on the roster', unplaced, []);
+      const by = (a) => FB.TeamByAbbr[a];
+      check('Bills QB beats Eagles backup', by('BUF').qb > by('PHI').qb);
+      check('Bills run defense is below their other defensive units', by('BUF').runD < by('BUF').cover);
+      check('Cowboys receivers beat their coverage', by('DAL').wr > by('DAL').cover);
+      check('Texans pass rush beats their line', by('HOU').rush > by('HOU').ol);
+      check('Vikings rate above Chargers', by('MIN').ovr > by('LAC').ovr);
+      const easy = FB.buildRoster(by('KC'), FB.DIFFICULTY.easy, rand).CB1;
+      const hard = FB.buildRoster(by('KC'), FB.DIFFICULTY.hard, rand).CB1;
+      check('Hard computer players are faster and tackle better than easy ones', hard.spd > easy.spd && hard.tak > easy.tak);
+      const fast = FB.buildRoster(by('BAL'), null, rand).QB.spd;
+      const slow = FB.buildRoster(by('LAR'), null, rand).QB.spd;
+      check('Lamar Jackson outruns Matthew Stafford', fast > slow + 1, `${fast} vs ${slow}`);
+    }
+
+    group('Schedule');
+    {
+      const rand = FB.U.seeded(42);
+      eq('272 games in a season', S.matchups().length, 272);
+      for (let run = 0; run < 5; run++) {
+        const weeks = S.buildSchedule(rand);
+        const count = {}, byes = {}, repeats = [];
+        FB.Teams.forEach((t) => {
+          count[t.abbr] = 0;
+          byes[t.abbr] = 0;
+        });
+        weeks.forEach((w) => {
+          const seen = new Set();
+          w.forEach((g) => {
+            [g.h, g.a].forEach((a) => {
+              if (seen.has(a)) repeats.push(a);
+              seen.add(a);
+              count[a]++;
+            });
+          });
+          FB.Teams.forEach((t) => {
+            if (!seen.has(t.abbr)) byes[t.abbr]++;
+          });
+        });
+        eq(`Schedule ${run}: 18 weeks`, weeks.length, 18);
+        check(`Schedule ${run}: every team plays 17`, Object.values(count).every((n) => n === 17));
+        check(`Schedule ${run}: every team has one bye`, Object.values(byes).every((n) => n === 1));
+        eq(`Schedule ${run}: nobody plays twice in a week`, repeats, []);
+      }
+      const divisionGames = S.matchups().filter((g) => {
+        const a = FB.TeamByAbbr[g.h], b = FB.TeamByAbbr[g.a];
+        return a.conf === b.conf && a.div === b.div;
+      }).length;
+      eq('Division rivals play home and away', divisionGames, 96);
+    }
+
+    group('Season');
+    {
+      const s = S.newSeason('BUF', 7);
+      for (let w = 0; w < 18; w++) S.finishWeek(s);
+      const rows = Object.values(S.table(s));
+      check('Everyone finishes with 17 games', rows.every((r) => r.w + r.l + r.t === 17));
+      eq('Wins equal losses across the league', rows.reduce((n, r) => n + r.w, 0), rows.reduce((n, r) => n + r.l, 0));
+      const seeds = s.playoffs.seeds.AFC;
+      eq('7 AFC playoff teams', new Set(seeds).size, 7);
+      const winners = FB.DIVISIONS.map((d) => S.divisionStandings(s, 'AFC', d)[0].abbr);
+      check('Top 4 seeds are the division winners', seeds.slice(0, 4).every((a) => winners.indexOf(a) >= 0));
+      check('A division winner seeds above wild cards even with a worse record possible', seeds.slice(4).every((a) => winners.indexOf(a) < 0));
+      eq('6 wild card games', s.playoffs.games.length, 6);
+      check('Top seeds are off in round one', !s.playoffs.games.some((g) => g.h === s.playoffs.seeds.AFC[0] || g.h === s.playoffs.seeds.NFC[0] || g.a === s.playoffs.seeds.AFC[0]));
+      eq('Better seed hosts 2 vs 7', [s.playoffs.games[0].h, s.playoffs.games[0].a], [seeds[1], seeds[6]]);
+
+      const saved = JSON.parse(JSON.stringify(s));
+      S.save(s);
+      eq('Season saves and reloads exactly', S.load(), saved);
+      S.clear();
+      eq('Clearing removes the save', S.load(), null);
+
+      S.finishRound(s);
+      eq('Divisional round has 4 games', s.playoffs.games.length, 4);
+      S.finishRound(s);
+      eq('Conference round has 2 games', s.playoffs.games.length, 2);
+      S.finishRound(s);
+      eq('Super Bowl has 1 game', s.playoffs.games.length, 1);
+      const sb = s.playoffs.games[0];
+      check('Super Bowl is AFC vs NFC', FB.TeamByAbbr[sb.h].conf !== FB.TeamByAbbr[sb.a].conf);
+      S.finishRound(s);
+      eq('Season ends with a champion', [s.phase, [sb.h, sb.a].indexOf(s.playoffs.champion) >= 0], ['done', true]);
+
+      const u = S.newSeason('KC', 11);
+      let guard = 0;
+      while (u.phase === 'regular' && guard++ < 30) {
+        if (S.userGame(u)) S.recordUserGame(u, 31, 3);
+        else S.finishWeek(u);
+      }
+      const r = S.table(u).KC;
+      eq('Your own results are recorded', [r.w, r.l], [17, 0]);
+      check('A 17-0 team is the top seed', u.playoffs.seeds.AFC[0] === 'KC');
+      eq('Top seed gets a first-round bye', S.userPlayoffGame(u), null);
+      S.finishRound(u);
+      check('Then plays in the next round', !!S.userPlayoffGame(u));
+      S.recordUserPlayoffGame(u, 0, 40);
+      eq('Losing ends your run', S.userPlayoffGame(u), null);
+    }
+
+    // Plays one whole computer-only game. Exposed so bigger runs can be done by hand.
+    function playGame(a, b, seed) {
+      const rand = FB.U.seeded(seed);
+      const m = new FB.Match({ teams: [a, b], user: null, rand });
+      let steps = 0;
+      const limit = 60 * 60 * 40;
+      const counts = {};
+      while (m.phase !== 'final' && steps < limit) {
+        m.update(1 / 60);
+        steps++;
+        m.events.splice(0).forEach((e) => {
+          counts[e.type] = (counts[e.type] || 0) + 1;
+        });
+      }
+      return { m, steps, finished: m.phase === 'final', counts };
+    }
+
+    window.playGame = playGame;
+    window.runGames = function (n, abbrA, abbrB, seed) {
+      const a = FB.TeamByAbbr[abbrA], b = FB.TeamByAbbr[abbrB];
+      const out = { games: n, winsA: 0, winsB: 0, unfinished: 0, ptsA: 0, ptsB: 0, ot: 0, minutes: 0, counts: {}, stats: { pass: 0, rush: 0, turnovers: 0, sacks: 0, plays: 0, first: 0 } };
+      for (let i = 0; i < n; i++) {
+        const swap = i % 2 === 1;
+        const r = playGame(swap ? b : a, swap ? a : b, seed + i);
+        const g = r.m.g;
+        if (!r.finished) out.unfinished++;
+        const pa = g.score[swap ? 1 : 0], pb = g.score[swap ? 0 : 1];
+        out.ptsA += pa;
+        out.ptsB += pb;
+        if (pa > pb) out.winsA++;
+        else if (pb > pa) out.winsB++;
+        if (g.ot) out.ot++;
+        out.minutes += r.steps / 3600;
+        Object.keys(r.counts).forEach((k) => (out.counts[k] = (out.counts[k] || 0) + r.counts[k]));
+        g.stats.forEach((st) => Object.keys(out.stats).forEach((k) => (out.stats[k] += st[k])));
+      }
+      out.avgA = out.ptsA / n;
+      out.avgB = out.ptsB / n;
+      out.minutes /= n;
+      Object.keys(out.stats).forEach((k) => (out.stats[k] = Math.round((out.stats[k] / (2 * n)) * 10) / 10));
+      return out;
+    };
+
+    // Yards, scores and turnovers per play type, for tuning game balance.
+    window.diag = function (n, a, b, seed) {
+      const log = {};
+      const original = FB.Match.prototype.endPlay;
+      FB.Match.prototype.endPlay = function () {
+        const s = this.sim, res = s.result;
+        const id = s.kind === 'scrimmage' ? s.play.id : s.kind;
+        const e = (log[id] = log[id] || { n: 0, yds: 0, td: 0, inc: 0, int: 0, sack: 0, fum: 0, big: 0, t: 0 });
+        e.n++;
+        e.t += s.t;
+        let y = 0;
+        if (res.type === 'down' && res.team === s.offTeam) y = res.yard - s.startYard;
+        if (res.type === 'td' && res.team === s.offTeam) y = 100 - s.startYard;
+        if (s.kind === 'scrimmage') {
+          e.yds += y;
+          if (y >= 20) e.big++;
+        } else if (res.type === 'down') e.yds += res.yard;
+        if (res.type === 'td') e.td++;
+        if (res.type === 'incomplete') e.inc++;
+        if (s.intercepted) e.int++;
+        if (s.sacked) e.sack++;
+        if (s.fumbled) e.fum++;
+        return original.call(this);
+      };
+      const r = window.runGames(n, a, b, seed);
+      FB.Match.prototype.endPlay = original;
+      const plays = {};
+      Object.keys(log).forEach((k) => {
+        const e = log[k];
+        plays[k] = `${e.n} avg ${(e.yds / e.n).toFixed(1)} td ${e.td} inc ${e.inc} int ${e.int} sk ${e.sack} fum ${e.fum} big ${e.big} t ${(e.t / e.n).toFixed(1)}`;
+      });
+      return { wins: [r.winsA, r.winsB], avg: [+r.avgA.toFixed(1), +r.avgB.toFixed(1)], ot: r.ot, minutes: +r.minutes.toFixed(1), stats: r.stats, plays };
+    };
+
+    group('Full games');
+    {
+      const teams = FB.Teams;
+      let finished = 0;
+      let bad = [];
+      teams.forEach((t, i) => {
+        const r = playGame(t, teams[(i + 1) % 32], 100 + i);
+        if (r.finished) finished++;
+        else bad.push(t.abbr + ' ' + r.m.phase);
+      });
+      eq('Every team finishes a full game', [finished, bad], [32, []]);
+
+      const r = window.runGames(30, 'MIN', 'LAC', 500);
+      check('The Vikings beat the Chargers more often than not', r.winsA > r.winsB, `${r.winsA}-${r.winsB}`);
+      eq('No game freezes', r.unfinished, 0);
+      check('Scores look like football', r.avgA > 3 && r.avgA < 60 && r.avgB >= 0 && r.avgB < 60, `${r.avgA} / ${r.avgB}`);
+    }
+
+    const total = passed + failures.length;
+    document.getElementById('summary').textContent = failures.length
+      ? `${failures.length} of ${total} FAILED`
+      : `All ${total} tests passed`;
+    window.TEST_RESULTS = { passed, failed: failures.length, failures };
+  </script>
+</body>
+</html>
